@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <netdb.h>
 
 #define SNAPSHOTLEN    1514
 #define PROMISCMODE    0
@@ -65,6 +66,22 @@ void diepcap(char *func, char *str) {
 //
 // address tools
 //
+char *client_hostname(char *ipstr) {
+    struct sockaddr_in sa;
+    char node[NI_MAXHOST];
+    int res;
+
+    sa.sin_family = AF_INET;
+    inet_pton(AF_INET, ipstr, &sa.sin_addr);
+
+    if((res = getnameinfo((struct sockaddr *) &sa, sizeof(sa), node, sizeof(node), NULL, 0, 0))) {
+        printf("getnameinfo: %s\n", gai_strerror(res));
+        return NULL;
+    }
+
+    return strdup(node);
+}
+
 unsigned char *utoip(int ip, unsigned char *buf) {
     buf[0] = ip & 0xFF;
     buf[1] = (ip >> 8) & 0xFF;
@@ -125,15 +142,16 @@ client_t *client_get_new(clients_t *clients, uint32_t ip) {
 }
 
 void clients_dumps(clients_t *clients) {
-    printf("----------------|-------------|-----------------\n");
+    printf("---------------------|-----------------|-------------|-----------------\n");
 
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
 
         float rx = client->traffic.rx / 1024.0;
         float tx = client->traffic.tx / 1024.0;
+        char *hostname = (client->hostname) ? client->hostname : "(unknown)";
 
-        printf("%-15s | % 6.1f KB/s | % 6.1f KB/s\n", client->address, rx, tx);
+        printf("%-20s | %-15s | % 6.1f KB/s | % 6.1f KB/s\n", hostname, client->address, rx, tx);
     }
 }
 
@@ -141,6 +159,20 @@ void clients_reset_pass(clients_t *clients) {
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
         memset(&client->traffic, 0, sizeof(client->traffic));
+    }
+}
+
+void clients_resolv(clients_t *clients) {
+    char iptmp[32];
+
+    for(size_t i = 0; i < clients->length; i++) {
+        client_t *client = &clients->list[i];
+
+        if(client->hostname)
+            continue;
+
+        sprintip(client->rawip, iptmp);
+        client->hostname = client_hostname(iptmp);
     }
 }
 
@@ -241,6 +273,7 @@ int main(int argc, char *argv[]) {
         userdata.lifetime.rx += userdata.runtotal.rx;
         userdata.lifetime.tx += userdata.runtotal.tx;
 
+        clients_resolv(&userdata.clients);
         clients_dumps(&userdata.clients);
         clients_reset_pass(&userdata.clients);
 
