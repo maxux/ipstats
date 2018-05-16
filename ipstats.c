@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pcap.h>
+#include <time.h>
 #include <netinet/in.h>
 #include <netinet/ether.h>
 #include <netinet/ip.h>
@@ -16,7 +17,7 @@
 
 #define SNAPSHOTLEN    1514
 #define PROMISCMODE    0
-#define BUFFERTIME     1000
+#define BUFFERTIME     100
 
 typedef struct run_t {
     uint64_t rx;
@@ -43,6 +44,8 @@ typedef struct userdata_t {
     uint32_t localnet;
     uint32_t localmask;
     uint64_t run;
+
+    time_t dumptime;
 
     run_t lifetime;
     run_t runtotal;
@@ -260,6 +263,8 @@ int main(int argc, char *argv[]) {
     userdata.localnet = ntohl(userdata.localnet);
     userdata.localmask = ntohl(userdata.localmask);
 
+    userdata.dumptime = time(NULL);
+
     while(1) {
         // reset this run counter
         userdata.runtotal.rx = 0;
@@ -273,10 +278,14 @@ int main(int argc, char *argv[]) {
         userdata.lifetime.rx += userdata.runtotal.rx;
         userdata.lifetime.tx += userdata.runtotal.tx;
 
-        clients_resolv(&userdata.clients);
+        if(userdata.dumptime == time(NULL))
+            continue;
+
+        // clients_resolv(&userdata.clients);
         clients_dumps(&userdata.clients);
         clients_reset_pass(&userdata.clients);
 
+        userdata.dumptime = time(NULL);
         userdata.run += 1;
     }
 
