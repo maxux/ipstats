@@ -1,7 +1,7 @@
 EXEC = ipstats
 
 CFLAGS  = -W -Wall -O2
-LDFLAGS = -lpcap
+LDFLAGS = -lpcap -lhiredis
 
 SRC=$(wildcard *.c)
 OBJ=$(SRC:.c=.o)

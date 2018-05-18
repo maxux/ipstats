@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <netdb.h>
+#include <hiredis/hiredis.h>
 
 #define SNAPSHOTLEN    1514
 #define PROMISCMODE    0
@@ -55,6 +56,8 @@ typedef struct userdata_t {
 } userdata_t;
 
 int prevCheck = 0;
+
+static char *jsonbuffer = NULL;
 
 void diep(char *str) {
     perror(str);
@@ -158,6 +161,38 @@ void clients_dumps(clients_t *clients) {
     }
 }
 
+char *client_json(client_t *client) {
+    char *b = jsonbuffer; // shortcut
+    int off = 0;
+
+    // set initial offset
+    off = 0;
+
+    off += sprintf(b + off, "{");
+    off += sprintf(b + off, "\"host\":\"%s\",", (client->hostname) ? client->hostname : "(unknown)");
+    off += sprintf(b + off, "\"addr\":\"%s\",", client->address);
+    off += sprintf(b + off, "\"rx\":%lu,", client->traffic.rx);
+    off += sprintf(b + off, "\"tx\":%lu", client->traffic.tx);
+    off += sprintf(b + off, "}");
+
+    return jsonbuffer;
+}
+
+void clients_dumps_redis(clients_t *clients, redisContext *redis) {
+    redisReply *reply;
+
+    for(size_t i = 0; i < clients->length; i++) {
+        client_t *client = &clients->list[i];
+        char *json = client_json(client);
+
+        reply = redisCommand(redis, "SET traffic-live-%s %s", client->address, json);
+        if(!reply || reply->type != REDIS_REPLY_STATUS)
+            fprintf(stderr, "wrong redis reply\n");
+
+        freeReplyObject(reply);
+    }
+}
+
 void clients_reset_pass(clients_t *clients) {
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
@@ -241,6 +276,7 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
 }
 
 int main(int argc, char *argv[]) {
+    redisContext *redis = NULL;
     char errbuff[PCAP_ERRBUF_SIZE];
     pcap_t *pd;
     userdata_t userdata;
@@ -248,6 +284,19 @@ int main(int argc, char *argv[]) {
     if(argc < 2) {
         fprintf(stderr, "Usage: %s interface\n", argv[0]);
         return 1;
+    }
+
+    // pre-allocate json buffer
+    if(!(jsonbuffer = malloc(sizeof(char) * 4192)))
+        diep("malloc");
+
+    // connect redis backend
+    if(!(redis = redisConnect("127.0.0.1", 6379)))
+        diep("redis");
+
+    if(redis->err) {
+        fprintf(stderr, "redis: %s\n", redis->errstr);
+        exit(EXIT_FAILURE);
     }
 
     // setting all counter to zero
@@ -283,6 +332,8 @@ int main(int argc, char *argv[]) {
 
         // clients_resolv(&userdata.clients);
         clients_dumps(&userdata.clients);
+        clients_dumps_redis(&userdata.clients, redis);
+
         clients_reset_pass(&userdata.clients);
 
         userdata.dumptime = time(NULL);
