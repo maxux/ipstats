@@ -24,6 +24,7 @@ static struct option long_options[] = {
     {"redis-socket", required_argument, 0, 's'},
     {"jsonfile",     required_argument, 0, 'j'},
     {"numeric",      no_argument,       0, 'n'},
+    {"external",     no_argument,       0, 'e'},
     {"help",         no_argument,       0, 'h'},
     {0, 0, 0, 0}
 };
@@ -315,6 +316,7 @@ void usage() {
     printf("  --redis-socket  redis backend unix socket path (override host and port)\n");
     printf("  --jsonfile      filename where dumps json (better use tmpfs, lot of write)\n");
     printf("  --numeric       don't resolv hostnames\n");
+    printf("  --external      ignore internal routing\n");
     printf("  --help          print this message\n");
 
     exit(EXIT_FAILURE);
@@ -413,6 +415,10 @@ int main(int argc, char *argv[]) {
 
             case 'n':
                 settings.resolv = 0;
+                break;
+
+            case 'e':
+                settings.inrouting = 0;
                 break;
 
             case 'h':
