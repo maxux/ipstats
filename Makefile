@@ -1,4 +1,4 @@
-EXEC = ipstats
+EXEC = lantraffic
 
 CFLAGS  = -W -Wall -O2
 LDFLAGS = -lpcap -lhiredis
