@@ -39,5 +39,21 @@
         clients_t clients;
 
     } userdata_t;
+
+    typedef struct lantraffic_t {
+        userdata_t userdata;
+
+        char *interface;
+        redisContext *redis;
+
+        char *redishost;
+        int redisport;
+        char *redisunix;
+
+        int resolv;
+
+        char *jsonfile;
+
+    } lantraffic_t;
 #endif
 

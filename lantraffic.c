@@ -14,8 +14,20 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <netdb.h>
+#include <getopt.h>
 #include <hiredis/hiredis.h>
 #include "lantraffic.h"
+
+static struct option long_options[] = {
+    {"interface",    required_argument, 0, 'i'},
+    {"redis-host",   required_argument, 0, 'r'},
+    {"redis-port",   required_argument, 0, 'p'},
+    {"redis-socket", required_argument, 0, 's'},
+    {"jsonfile",     required_argument, 0, 'j'},
+    {"numeric",      no_argument,       0, 'n'},
+    {"help",         no_argument,       0, 'h'},
+    {0, 0, 0, 0}
+};
 
 int prevCheck = 0;
 
@@ -237,72 +249,171 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
     }
 }
 
-int main(int argc, char *argv[]) {
-    redisContext *redis = NULL;
+int lantraffic(lantraffic_t *settings) {
     char errbuff[PCAP_ERRBUF_SIZE];
+    userdata_t *userdata = &settings->userdata;
     pcap_t *pd;
-    userdata_t userdata;
-
-    if(argc < 2) {
-        fprintf(stderr, "Usage: %s interface\n", argv[0]);
-        return 1;
-    }
 
     // pre-allocate json buffer
     if(!(jsonbuffer = malloc(sizeof(char) * 4192)))
         diep("malloc");
 
-    // connect redis backend
-    if(!(redis = redisConnect("127.0.0.1", 6379)))
-        diep("redis");
-
-    if(redis->err) {
-        fprintf(stderr, "redis: %s\n", redis->errstr);
-        exit(EXIT_FAILURE);
-    }
-
-    // setting all counter to zero
-    memset(&userdata, 0, sizeof(userdata_t));
-
-    if((pd = pcap_open_live(argv[1], SNAPSHOTLEN, PROMISCMODE, BUFFERTIME, errbuff)) == NULL)
+    if((pd = pcap_open_live(settings->interface, SNAPSHOTLEN, PROMISCMODE, BUFFERTIME, errbuff)) == NULL)
         diepcap("pcap_open_live", errbuff);
 
-    if(pcap_lookupnet(argv[1], &userdata.localnet, &userdata.localmask, errbuff) == -1)
+    if(pcap_lookupnet(settings->interface, &userdata->localnet, &userdata->localmask, errbuff) == -1)
         diepcap("pcap_lookupnet", errbuff);
 
     // convert host and mask to host integer
-    userdata.localnet = ntohl(userdata.localnet);
-    userdata.localmask = ntohl(userdata.localmask);
+    userdata->localnet = ntohl(userdata->localnet);
+    userdata->localmask = ntohl(userdata->localmask);
 
-    userdata.dumptime = time(NULL);
+    userdata->dumptime = time(NULL);
 
     while(1) {
         // reset this run counter
-        userdata.runtotal.rx = 0;
-        userdata.runtotal.tx = 0;
+        userdata->runtotal.rx = 0;
+        userdata->runtotal.tx = 0;
 
-        if(pcap_dispatch(pd, -1, callback, (u_char *) &userdata) < 0)
+        if(pcap_dispatch(pd, -1, callback, (u_char *) userdata) < 0)
             diepcap("pcap_dispatch", pcap_geterr(pd));
 
         // printf("RUN: in: %.1f KB/s, out: %.1f KB/s\n", userdata.runtotal.rx / 1024.0, userdata.runtotal.tx / 1024.0);
 
-        userdata.lifetime.rx += userdata.runtotal.rx;
-        userdata.lifetime.tx += userdata.runtotal.tx;
+        userdata->lifetime.rx += userdata->runtotal.rx;
+        userdata->lifetime.tx += userdata->runtotal.tx;
 
-        if(userdata.dumptime == time(NULL))
+        if(userdata->dumptime == time(NULL))
             continue;
 
-        // clients_resolv(&userdata.clients);
-        clients_dumps(&userdata.clients);
-        clients_dumps_redis(&userdata.clients, redis);
+        if(settings->resolv)
+            clients_resolv(&userdata->clients);
 
-        clients_reset_pass(&userdata.clients);
+        clients_dumps(&userdata->clients);
 
-        userdata.dumptime = time(NULL);
-        userdata.run += 1;
+        if(settings->redis)
+            clients_dumps_redis(&userdata->clients, settings->redis);
+
+        clients_reset_pass(&userdata->clients);
+
+        userdata->dumptime = time(NULL);
+        userdata->run += 1;
     }
 
     return 0;
 }
 
+void usage() {
+    printf("Command line arguments:\n");
+    printf("  --interface     interface to monitor (required)\n");
+    printf("  --redis-host    redis backend host\n");
+    printf("  --redis-port    redis backend port\n");
+    printf("  --redis-socket  redis backend unix socket path (override host and port)\n");
+    printf("  --jsonfile      filename where dumps json (better use tmpfs, lot of write)\n");
+    printf("  --numeric       don't resolv hostnames\n");
+    printf("  --help          print this message\n");
 
+    exit(EXIT_FAILURE);
+}
+
+int redis_connect_tcp(lantraffic_t *settings) {
+    // connect redis backend unix tcp
+    if(!(settings->redis = redisConnect(settings->redishost, settings->redisport)))
+        diep("redis");
+
+    if(settings->redis->err) {
+        fprintf(stderr, "redis (tcp): %s\n", settings->redis->errstr);
+        exit(EXIT_FAILURE);
+    }
+
+    return 0;
+}
+
+int redis_connect_unix(lantraffic_t *settings) {
+    // connect redis backend unix unix socket
+    if(!(settings->redis = redisConnectUnix(settings->redisunix)))
+        diep("redis");
+
+    if(settings->redis->err) {
+        fprintf(stderr, "redis: %s\n", settings->redis->errstr);
+        exit(EXIT_FAILURE);
+    }
+
+    return 0;
+}
+
+int initializer(lantraffic_t *settings) {
+    if(settings->redisunix) {
+        redis_connect_unix(settings);
+
+    } else if(settings->redishost) {
+        redis_connect_tcp(settings);
+    }
+
+    if(settings->jsonfile) {
+        // json
+    }
+
+    return lantraffic(settings);
+}
+
+int main(int argc, char *argv[]) {
+    lantraffic_t settings;
+
+    printf("[+] initializing lantraffic\n");
+
+    // settings default value
+    memset(&settings, 0, sizeof(lantraffic_t));
+    settings.resolv = 1;
+
+    // parsing commandline
+    int option_index = 0;
+
+    while(1) {
+        int i = getopt_long_only(argc, argv, "", long_options, &option_index);
+
+        if(i == -1)
+            break;
+
+        switch(i) {
+            case 'i':
+                settings.interface = optarg;
+                break;
+
+            case 'r':
+                settings.redishost = optarg;
+                break;
+
+            case 'p':
+                settings.redisport = atoi(optarg);
+                break;
+
+            case 's':
+                settings.redisunix = optarg;
+                break;
+
+            case 'j':
+                settings.jsonfile = optarg;
+                break;
+
+            case 'n':
+                settings.resolv = 0;
+                break;
+
+            case 'h':
+                usage();
+                break;
+
+            case '?':
+            default:
+               exit(EXIT_FAILURE);
+        }
+    }
+
+    if(!settings.interface) {
+        fprintf(stderr, "[-] missing interface name, fallback to 'lo'\n");
+        settings.interface = "lo";
+    }
+
+    return initializer(&settings);
+}
