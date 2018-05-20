@@ -1,12 +1,16 @@
 EXEC = lantraffic
 
 CFLAGS  = -W -Wall -O2
-LDFLAGS = -lpcap -lhiredis
+LDFLAGS = -lpcap
 
 SRC=$(wildcard *.c)
 OBJ=$(SRC:.c=.o)
 
+all: LDFLAGS += -lhiredis
 all: $(EXEC)
+
+noredis: CFLAGS += -DNOREDIS
+noredis: $(EXEC)
 
 $(EXEC): $(OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)

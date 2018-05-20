@@ -1,6 +1,17 @@
 # Lan Traffic Monitor
 Live traffic monitor of your LAN clients from router point of view
 
+# Installation
+- Clone this repository
+- Type `make`
+
+By default, this include `redis` support which depends on `hiredis`. You can compile `lantraffic`
+without `redis` support using `make noredis`.
+
+The only required dependency is `libpcap` obviously.
+
+You can cross-compile by overriding `CC` variable, eg: `make CC=arm-openwrt-linux-muslgnueabi-gcc`
+
 # Implementation
 This use libpcap to monitor one interface.
 

@@ -1,6 +1,12 @@
 #ifndef LANTRAFFIC_H
     #define LANTRAFFIC_H
 
+    #ifndef NOREDIS
+        #include <hiredis/hiredis.h>
+    #else
+        #define redisContext void
+    #endif
+
     #define SNAPSHOTLEN    1514
     #define PROMISCMODE    0
     #define BUFFERTIME     100

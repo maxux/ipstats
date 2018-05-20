@@ -15,7 +15,6 @@
 #include <string.h>
 #include <netdb.h>
 #include <getopt.h>
-#include <hiredis/hiredis.h>
 #include "lantraffic.h"
 
 static struct option long_options[] = {
@@ -153,6 +152,7 @@ char *client_json(client_t *client) {
 }
 
 void clients_dumps_redis(clients_t *clients, redisContext *redis) {
+#ifndef NOREDIS
     redisReply *reply;
 
     for(size_t i = 0; i < clients->length; i++) {
@@ -165,6 +165,10 @@ void clients_dumps_redis(clients_t *clients, redisContext *redis) {
 
         freeReplyObject(reply);
     }
+#else
+    (void) clients;
+    (void) redis;
+#endif
 }
 
 void clients_reset_pass(clients_t *clients) {
@@ -317,6 +321,7 @@ void usage() {
 }
 
 int redis_connect_tcp(lantraffic_t *settings) {
+#ifndef NOREDIS
     // connect redis backend unix tcp
     if(!(settings->redis = redisConnect(settings->redishost, settings->redisport)))
         diep("redis");
@@ -325,11 +330,16 @@ int redis_connect_tcp(lantraffic_t *settings) {
         fprintf(stderr, "redis (tcp): %s\n", settings->redis->errstr);
         exit(EXIT_FAILURE);
     }
+#else
+    (void) settings;
+    fprintf(stderr, "[-] redis support not compiled in\n");
+#endif
 
     return 0;
 }
 
 int redis_connect_unix(lantraffic_t *settings) {
+#ifndef NOREDIS
     // connect redis backend unix unix socket
     if(!(settings->redis = redisConnectUnix(settings->redisunix)))
         diep("redis");
@@ -338,6 +348,10 @@ int redis_connect_unix(lantraffic_t *settings) {
         fprintf(stderr, "redis: %s\n", settings->redis->errstr);
         exit(EXIT_FAILURE);
     }
+#else
+    (void) settings;
+    fprintf(stderr, "[-] redis support not compiled in\n");
+#endif
 
     return 0;
 }
