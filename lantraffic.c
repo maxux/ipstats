@@ -193,12 +193,17 @@ void clients_resolv(clients_t *clients) {
 // packets handler
 //
 void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *buff) {
+    lantraffic_t *settings = (lantraffic_t *) user;
+    userdata_t *userdata = &settings->userdata;
     struct ether_header *eptr;
     u_char *packet;
     struct iphdr *ipheader;
     unsigned char src[16], dst[16];
-    userdata_t *userdata = (userdata_t *) user;
     client_t *client = NULL;
+
+    // shortcut accessor
+    uint32_t lmask = userdata->localmask;
+    uint32_t lnet = userdata->localnet;
 
     uint32_t srcip;
     uint32_t dstip;
@@ -211,6 +216,15 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
 
         srcip = ntohl(ipheader->saddr);
         dstip = ntohl(ipheader->daddr);
+
+        // if source and destination match the monitored netmask
+        // this is a inter-routing (cross-interface or explicit routing)
+        // and this can be ignored via command line argument (FIXME)
+        if((srcip & lmask) == lnet && (dstip & lmask) == lnet) {
+            if(!settings->inrouting)
+                // skip this packet
+                return;
+        }
 
         // source is in our local network
         // this is an outgoing packet
@@ -234,18 +248,6 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
 
         utoip(ipheader->saddr, src);
         utoip(ipheader->daddr, dst);
-
-        /*
-        printf(
-            "%lu: %d.%d.%d.%d -> %d.%d.%d.%d: %d bytes\n",
-            userdata->run,
-            src[0], src[1], src[2], src[3],
-            dst[0], dst[1], dst[2], dst[3],
-            h->len
-        );
-        */
-
-        fflush(stdout);
     }
 }
 
@@ -275,10 +277,8 @@ int lantraffic(lantraffic_t *settings) {
         userdata->runtotal.rx = 0;
         userdata->runtotal.tx = 0;
 
-        if(pcap_dispatch(pd, -1, callback, (u_char *) userdata) < 0)
+        if(pcap_dispatch(pd, -1, callback, (u_char *) settings) < 0)
             diepcap("pcap_dispatch", pcap_geterr(pd));
-
-        // printf("RUN: in: %.1f KB/s, out: %.1f KB/s\n", userdata.runtotal.rx / 1024.0, userdata.runtotal.tx / 1024.0);
 
         userdata->lifetime.rx += userdata->runtotal.rx;
         userdata->lifetime.tx += userdata->runtotal.tx;
@@ -365,6 +365,7 @@ int main(int argc, char *argv[]) {
     // settings default value
     memset(&settings, 0, sizeof(lantraffic_t));
     settings.resolv = 1;
+    settings.inrouting = 1;
 
     // parsing commandline
     int option_index = 0;

@@ -51,6 +51,7 @@
         char *redisunix;
 
         int resolv;
+        int inrouting;
 
         char *jsonfile;
 
