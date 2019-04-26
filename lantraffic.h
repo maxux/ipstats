@@ -23,6 +23,8 @@
         uint32_t rawip;
         char address[16];
         char *hostname;
+        time_t activity;
+        uint8_t macaddr[6];
 
     } client_t;
 

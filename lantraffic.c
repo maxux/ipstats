@@ -83,7 +83,7 @@ char *sprintip(int ip, char *buffer) {
 //
 // clients list
 //
-client_t *client_new(clients_t *clients, uint32_t ip, char *hostname) {
+client_t *client_new(clients_t *clients, uint32_t ip, char *hostname, uint8_t *macaddr) {
     client_t *client;
 
     clients->length += 1;
@@ -96,6 +96,9 @@ client_t *client_new(clients_t *clients, uint32_t ip, char *hostname) {
     client->hostname = hostname;
     client->rawip = ip;
     sprintip(ip, client->address);
+
+    memcpy(client->macaddr, macaddr, 6);
+    client->activity = time(NULL);
 
     return client;
 }
@@ -111,14 +114,13 @@ client_t *client_get(clients_t *clients, uint32_t ip) {
     return NULL;
 }
 
-client_t *client_get_new(clients_t *clients, uint32_t ip) {
+client_t *client_get_new(clients_t *clients, uint32_t ip, uint8_t *macaddr) {
     client_t *client = NULL;
 
-    if((client = client_get(clients, ip))) {
+    if((client = client_get(clients, ip)))
         return client;
-    }
 
-    return client_new(clients, ip, NULL);
+    return client_new(clients, ip, NULL, macaddr);
 }
 
 void clients_dumps(clients_t *clients) {
@@ -135,9 +137,18 @@ void clients_dumps(clients_t *clients) {
     }
 }
 
+char *macbin_str(char *buffer, uint8_t *m) {
+    sprintf(buffer, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+    return buffer;
+}
+
+
 char *client_json(client_t *client) {
     char *b = jsonbuffer; // shortcut
+    char temp[32];
     int off = 0;
+
+    macbin_str(temp, client->macaddr);
 
     // set initial offset
     off = 0;
@@ -146,7 +157,9 @@ char *client_json(client_t *client) {
     off += sprintf(b + off, "\"host\":\"%s\",", (client->hostname) ? client->hostname : "(unknown)");
     off += sprintf(b + off, "\"addr\":\"%s\",", client->address);
     off += sprintf(b + off, "\"rx\":%lu,", client->traffic.rx);
-    off += sprintf(b + off, "\"tx\":%lu", client->traffic.tx);
+    off += sprintf(b + off, "\"tx\":%lu,", client->traffic.tx);
+    off += sprintf(b + off, "\"active\":%lu,", client->activity);
+    off += sprintf(b + off, "\"macaddr\":\"%s\"", temp);
     off += sprintf(b + off, "}");
 
     return jsonbuffer;
@@ -234,20 +247,20 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
         // source is in our local network
         // this is an outgoing packet
         if((srcip & userdata->localmask) == userdata->localnet) {
-            client = client_get_new(&userdata->clients, ipheader->saddr);
-            // client = client_get_new(&userdata->clients, ipheader->daddr);
+            client = client_get_new(&userdata->clients, ipheader->saddr, eptr->ether_shost);
             client->lifetime.tx += h->len;
             client->traffic.tx += h->len;
+            client->activity = time(NULL);
             userdata->runtotal.tx += h->len;
         }
 
         // destination is in our local network
         // this is an incoming packet
         if((dstip & userdata->localmask) == userdata->localnet) {
-            client = client_get_new(&userdata->clients, ipheader->daddr);
-            // client = client_get_new(&userdata->clients, ipheader->saddr);
+            client = client_get_new(&userdata->clients, ipheader->daddr, eptr->ether_dhost);
             client->lifetime.rx += h->len;
             client->traffic.rx += h->len;
+            client->activity = time(NULL);
             userdata->runtotal.rx += h->len;
         }
 
