@@ -152,9 +152,12 @@ char *client_json(client_t *client) {
 
     // set initial offset
     off = 0;
-
     off += sprintf(b + off, "{");
-    off += sprintf(b + off, "\"host\":\"%s\",", (client->hostname) ? client->hostname : "(unknown)");
+
+    // do not append hostname if not defined
+    if(client->hostname)
+        off += sprintf(b + off, "\"host\":\"%s\",", client->hostname);
+
     off += sprintf(b + off, "\"addr\":\"%s\",", client->address);
     off += sprintf(b + off, "\"rx\":%lu,", client->traffic.rx);
     off += sprintf(b + off, "\"tx\":%lu,", client->traffic.tx);
