@@ -161,6 +161,8 @@ char *client_json(client_t *client) {
     off += sprintf(b + off, "\"addr\":\"%s\",", client->address);
     off += sprintf(b + off, "\"rx\":%lu,", client->traffic.rx);
     off += sprintf(b + off, "\"tx\":%lu,", client->traffic.tx);
+    off += sprintf(b + off, "\"total-rx\":%lu,", client->lifetime.rx);
+    off += sprintf(b + off, "\"total-tx\":%lu,", client->lifetime.tx);
     off += sprintf(b + off, "\"active\":%lu,", client->activity);
     off += sprintf(b + off, "\"macaddr\":\"%s\"", temp);
     off += sprintf(b + off, "}");
