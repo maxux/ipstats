@@ -1,6 +1,6 @@
 EXEC = lantraffic
 
-CFLAGS  = -W -Wall -O2
+CFLAGS  = -g -W -Wall -O2
 LDFLAGS = -lpcap
 
 SRC=$(wildcard *.c)

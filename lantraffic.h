@@ -17,6 +17,19 @@
 
     } run_t;
 
+    typedef struct addr_t {
+        size_t addrlen;
+        uint8_t *addr;
+        uint8_t *mask;
+
+    } addr_t;
+
+    typedef struct addrs_t {
+        addr_t **addrs;
+        size_t length;
+
+    } addrs_t;
+
     typedef struct client_t {
         run_t traffic;
         run_t lifetime;
@@ -35,8 +48,7 @@
     } clients_t;
 
     typedef struct userdata_t {
-        uint32_t localnet;
-        uint32_t localmask;
+        addrs_t *addrs;
         uint64_t run;
 
         time_t dumptime;

@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <netinet/ether.h>
 #include <netinet/ip.h>
+#include <linux/ipv6.h>
 #include <netinet/tcp.h>
 #include <netinet/if_ether.h>
 #include <net/ethernet.h>
@@ -15,6 +16,9 @@
 #include <string.h>
 #include <netdb.h>
 #include <getopt.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netdb.h>
 #include "lantraffic.h"
 
 static struct option long_options[] = {
@@ -29,16 +33,14 @@ static struct option long_options[] = {
     {0, 0, 0, 0}
 };
 
-int prevCheck = 0;
-
 static char *jsonbuffer = NULL;
 
-void diep(char *str) {
+static void diep(char *str) {
     perror(str);
     exit(EXIT_FAILURE);
 }
 
-void diepcap(char *func, char *str) {
+static void diepcap(char *func, char *str) {
     fprintf(stderr, "[-] %s: %s\n", func, str);
     exit(EXIT_FAILURE);
 }
@@ -46,7 +48,7 @@ void diepcap(char *func, char *str) {
 //
 // address tools
 //
-char *client_hostname(char *ipstr) {
+static char *client_hostname(char *ipstr) {
     struct sockaddr_in sa;
     char node[NI_MAXHOST];
     int res;
@@ -62,28 +64,10 @@ char *client_hostname(char *ipstr) {
     return strdup(node);
 }
 
-unsigned char *utoip(int ip, unsigned char *buf) {
-    buf[0] = ip & 0xFF;
-    buf[1] = (ip >> 8) & 0xFF;
-    buf[2] = (ip >> 16) & 0xFF;
-    buf[3] = (ip >> 24) & 0xFF;
-
-    return buf;
-}
-
-char *sprintip(int ip, char *buffer) {
-    unsigned char tmpip[16];
-
-    utoip(ip, tmpip);
-    sprintf(buffer, "%d.%d.%d.%d", tmpip[0], tmpip[1], tmpip[2], tmpip[3]);
-
-    return buffer;
-}
-
 //
 // clients list
 //
-client_t *client_new(clients_t *clients, uint32_t ip, char *hostname, uint8_t *macaddr) {
+static client_t *client_new(clients_t *clients, uint32_t ip, char *hostname, uint8_t *macaddr) {
     client_t *client;
 
     clients->length += 1;
@@ -95,7 +79,9 @@ client_t *client_new(clients_t *clients, uint32_t ip, char *hostname, uint8_t *m
 
     client->hostname = hostname;
     client->rawip = ip;
-    sprintip(ip, client->address);
+
+    // string ipv4
+    inet_ntop(AF_INET, &ip, client->address, sizeof(client->address));
 
     memcpy(client->macaddr, macaddr, 6);
     client->activity = time(NULL);
@@ -103,7 +89,7 @@ client_t *client_new(clients_t *clients, uint32_t ip, char *hostname, uint8_t *m
     return client;
 }
 
-client_t *client_get(clients_t *clients, uint32_t ip) {
+static client_t *client_get(clients_t *clients, uint32_t ip) {
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
 
@@ -114,7 +100,7 @@ client_t *client_get(clients_t *clients, uint32_t ip) {
     return NULL;
 }
 
-client_t *client_get_new(clients_t *clients, uint32_t ip, uint8_t *macaddr) {
+static client_t *client_get_new(clients_t *clients, uint32_t ip, uint8_t *macaddr) {
     client_t *client = NULL;
 
     if((client = client_get(clients, ip)))
@@ -123,7 +109,18 @@ client_t *client_get_new(clients_t *clients, uint32_t ip, uint8_t *macaddr) {
     return client_new(clients, ip, NULL, macaddr);
 }
 
-void clients_dumps(clients_t *clients) {
+static client_t *client_get_mac(clients_t *clients, uint8_t *macaddr) {
+    for(size_t i = 0; i < clients->length; i++) {
+        client_t *client = &clients->list[i];
+
+        if(memcmp(client->macaddr, macaddr, 6) == 0)
+            return client;
+    }
+
+    return NULL;
+}
+
+static void clients_dumps(clients_t *clients) {
     printf("---------------------|-----------------|-------------|-----------------\n");
 
     for(size_t i = 0; i < clients->length; i++) {
@@ -137,13 +134,13 @@ void clients_dumps(clients_t *clients) {
     }
 }
 
-char *macbin_str(char *buffer, uint8_t *m) {
+static char *macbin_str(char *buffer, uint8_t *m) {
     sprintf(buffer, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
     return buffer;
 }
 
 
-char *client_json(client_t *client) {
+static char *client_json(client_t *client) {
     char *b = jsonbuffer; // shortcut
     char temp[32];
     int off = 0;
@@ -170,7 +167,7 @@ char *client_json(client_t *client) {
     return jsonbuffer;
 }
 
-void clients_dumps_redis(clients_t *clients, redisContext *redis) {
+static void clients_dumps_redis(clients_t *clients, redisContext *redis) {
 #ifndef NOREDIS
     redisReply *reply;
 
@@ -190,27 +187,46 @@ void clients_dumps_redis(clients_t *clients, redisContext *redis) {
 #endif
 }
 
-void clients_reset_pass(clients_t *clients) {
+static void clients_reset_pass(clients_t *clients) {
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
         memset(&client->traffic, 0, sizeof(client->traffic));
     }
 }
 
-void clients_resolv(clients_t *clients) {
-    char iptmp[32];
-
+static void clients_resolv(clients_t *clients) {
     for(size_t i = 0; i < clients->length; i++) {
         client_t *client = &clients->list[i];
 
         if(client->hostname)
             continue;
 
-        sprintip(client->rawip, iptmp);
-        client->hostname = client_hostname(iptmp);
+        client->hostname = client_hostname(client->address);
     }
 }
 
+int address_match(addr_t *addr, uint8_t *input, size_t len) {
+    for(size_t i = 0; i < len; i++) {
+        if((input[i] & addr->mask[i]) != (addr->addr[i] & addr->mask[i]))
+            return 0;
+    }
+
+    return 1;
+}
+
+int addresses_match(addrs_t *addrs, uint8_t *input, size_t len) {
+    for(size_t i = 0; i < addrs->length; i++) {
+        addr_t *addr = addrs->addrs[i];
+
+        if(addr->addrlen != len)
+            continue;
+
+        if(address_match(addr, input, len))
+            return 1;
+    }
+
+    return 0;
+}
 
 //
 // packets handler
@@ -220,39 +236,29 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
     userdata_t *userdata = &settings->userdata;
     struct ether_header *eptr;
     u_char *packet;
-    struct iphdr *ipheader;
-    unsigned char src[16], dst[16];
     client_t *client = NULL;
-
-    // shortcut accessor
-    uint32_t lmask = userdata->localmask;
-    uint32_t lnet = userdata->localnet;
-
-    uint32_t srcip;
-    uint32_t dstip;
 
     eptr = (struct ether_header *) buff;
 
     if(ntohs(eptr->ether_type) == ETHERTYPE_IP) {
         packet = (unsigned char *)(buff + sizeof(struct ether_header));
-        ipheader = (struct iphdr *) packet;
-
-        srcip = ntohl(ipheader->saddr);
-        dstip = ntohl(ipheader->daddr);
+        struct iphdr *iph = (struct iphdr *) packet;
 
         // if source and destination match the monitored netmask
         // this is a inter-routing (cross-interface or explicit routing)
         // and this can be ignored via command line argument (FIXME)
+        #if 0
         if((srcip & lmask) == lnet && (dstip & lmask) == lnet) {
             if(!settings->inrouting)
                 // skip this packet
                 return;
         }
+        #endif
 
         // source is in our local network
         // this is an outgoing packet
-        if((srcip & userdata->localmask) == userdata->localnet) {
-            client = client_get_new(&userdata->clients, ipheader->saddr, eptr->ether_shost);
+        if(addresses_match(userdata->addrs, (uint8_t *) &iph->saddr, 4)) {
+            client = client_get_new(&userdata->clients, iph->saddr, eptr->ether_shost);
             client->lifetime.tx += h->len;
             client->traffic.tx += h->len;
             client->activity = time(NULL);
@@ -261,17 +267,120 @@ void callback(unsigned char *user, const struct pcap_pkthdr *h, const u_char *bu
 
         // destination is in our local network
         // this is an incoming packet
-        if((dstip & userdata->localmask) == userdata->localnet) {
-            client = client_get_new(&userdata->clients, ipheader->daddr, eptr->ether_dhost);
+        if(addresses_match(userdata->addrs, (uint8_t *) &iph->daddr, 4)) {
+            client = client_get_new(&userdata->clients, iph->daddr, eptr->ether_dhost);
             client->lifetime.rx += h->len;
             client->traffic.rx += h->len;
             client->activity = time(NULL);
             userdata->runtotal.rx += h->len;
         }
-
-        utoip(ipheader->saddr, src);
-        utoip(ipheader->daddr, dst);
     }
+
+    if(ntohs(eptr->ether_type) == ETHERTYPE_IPV6) {
+        packet = (unsigned char *)(buff + sizeof(struct ether_header));
+        struct ipv6hdr *iph = (struct ipv6hdr *) packet;
+
+        if(addresses_match(userdata->addrs, (uint8_t *) &iph->saddr, 16)) {
+            client = client_get_mac(&userdata->clients, eptr->ether_shost);
+
+            // skip if no client found (waiting for ipv4 first)
+            if(!client)
+                return;
+
+            client->lifetime.tx += h->len;
+            client->traffic.tx += h->len;
+            client->activity = time(NULL);
+            userdata->runtotal.tx += h->len;
+        }
+
+        if(addresses_match(userdata->addrs, (uint8_t *) &iph->daddr, 16)) {
+            client = client_get_mac(&userdata->clients, eptr->ether_dhost);
+
+            // skip if no client found (waiting for ipv4 first)
+            if(!client)
+                return;
+
+            client->lifetime.rx += h->len;
+            client->traffic.rx += h->len;
+            client->activity = time(NULL);
+            userdata->runtotal.rx += h->len;
+        }
+    }
+}
+
+addr_t *interface_init(size_t addrlen) {
+    addr_t *addr;
+
+    if(!(addr = malloc(sizeof(addr_t))))
+        return NULL;
+
+    addr->addrlen = addrlen;
+
+    if(!(addr->addr = calloc(addrlen, 1)))
+        diep("malloc");
+
+    if(!(addr->mask = calloc(addrlen, 1)))
+        diep("malloc");
+
+    return addr;
+}
+
+addrs_t *interface_lookup(char *interface) {
+    struct ifaddrs *ifap;
+    addrs_t *found = NULL;
+
+    // initializing empty addresses list
+    if(!(found = calloc(sizeof(addrs_t), 1)))
+        diep("calloc");
+
+    // fetching system information
+    getifaddrs(&ifap);
+
+    for(struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        addr_t *addr = NULL;
+
+        if(!ifa->ifa_addr)
+            continue;
+
+        // keeping only ipv4 or ipv6 interface
+        if(ifa->ifa_addr->sa_family != AF_INET6 && ifa->ifa_addr->sa_family != AF_INET)
+            continue;
+
+        // skipping non-matching interface name
+        if(strcmp(ifa->ifa_name, interface) != 0)
+            continue;
+
+        // we are sure it's INET or INET6 tested before
+        if(ifa->ifa_addr->sa_family == AF_INET6) {
+            struct sockaddr_in6 *sa;
+            addr = interface_init(16); // INET6_ADDRSTRLEN
+
+            sa = (struct sockaddr_in6 *) ifa->ifa_addr;
+            memcpy(addr->addr, &sa->sin6_addr, addr->addrlen);
+
+            sa = (struct sockaddr_in6 *) ifa->ifa_netmask;
+            memcpy(addr->mask, &sa->sin6_addr, addr->addrlen);
+        }
+
+        if(ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *sa;
+            addr = interface_init(4); // INET_ADDRSTRLEN
+
+            sa = (struct sockaddr_in *) ifa->ifa_addr;
+            memcpy(addr->addr, &sa->sin_addr, addr->addrlen);
+
+            sa = (struct sockaddr_in *) ifa->ifa_netmask;
+            memcpy(addr->mask, &sa->sin_addr, addr->addrlen);
+        }
+
+        found->length += 1;
+        if(!(found->addrs = realloc(found->addrs, sizeof(addr_t *) * found->length)))
+            diep("realloc");
+
+        found->addrs[found->length - 1] = addr;
+    }
+
+    return found;
 }
 
 int lantraffic(lantraffic_t *settings) {
@@ -283,16 +392,17 @@ int lantraffic(lantraffic_t *settings) {
     if(!(jsonbuffer = malloc(sizeof(char) * 4192)))
         diep("malloc");
 
+    // initializing pcap
     if((pd = pcap_open_live(settings->interface, SNAPSHOTLEN, PROMISCMODE, BUFFERTIME, errbuff)) == NULL)
         diepcap("pcap_open_live", errbuff);
 
-    if(pcap_lookupnet(settings->interface, &userdata->localnet, &userdata->localmask, errbuff) == -1)
-        diepcap("pcap_lookupnet", errbuff);
+    // fetching interfaces data
+    printf("[+] reading interface addresses: %s\n", settings->interface);
 
-    // convert host and mask to host integer
-    userdata->localnet = ntohl(userdata->localnet);
-    userdata->localmask = ntohl(userdata->localmask);
+    userdata->addrs = interface_lookup(settings->interface);
+    printf("[+] %lu addresses found\n", userdata->addrs->length);
 
+    // monitoring
     userdata->dumptime = time(NULL);
 
     while(1) {
